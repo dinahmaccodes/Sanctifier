@@ -22,8 +22,10 @@ fn test_analyze_valid_contract() {
 
     cmd.arg("analyze")
         .arg(fixture_path)
+        .env_remove("RUST_LOG")
         .assert()
         .success()
+        .stderr(predicates::str::is_empty())
         .stdout(predicates::str::contains("Static analysis complete."))
         .stdout(predicates::str::contains("No ledger size issues found."))
         .stdout(predicates::str::contains(
@@ -63,6 +65,7 @@ fn test_analyze_json_output() {
         .arg(fixture_path)
         .arg("--format")
         .arg("json")
+        .env_remove("RUST_LOG")
         .assert()
         .success();
 
@@ -82,6 +85,40 @@ fn test_analyze_empty_macro_heavy() {
         .assert()
         .success()
         .stdout(predicates::str::contains("Static analysis complete."));
+}
+
+#[test]
+fn test_analyze_debug_logging_goes_to_stderr() {
+    let mut cmd = Command::cargo_bin("sanctifier").unwrap();
+    let fixture_path = env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/valid_contract.rs");
+
+    cmd.arg("analyze")
+        .arg(fixture_path)
+        .env("RUST_LOG", "sanctifier=debug")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Scanning Rust source file"))
+        .stdout(predicates::str::contains("Static analysis complete."));
+}
+
+#[test]
+fn test_analyze_json_logs_do_not_pollute_stdout() {
+    let mut cmd = Command::cargo_bin("sanctifier").unwrap();
+    let fixture_path = env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/valid_contract.rs");
+
+    cmd.arg("analyze")
+        .arg(fixture_path)
+        .arg("--format")
+        .arg("json")
+        .env("RUST_LOG", "sanctifier=debug")
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with("{"))
+        .stderr(predicates::str::contains("\"level\":\"DEBUG\""));
 }
 
 #[test]

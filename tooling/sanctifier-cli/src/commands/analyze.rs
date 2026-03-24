@@ -8,6 +8,7 @@ use sanctifier_core::{Analyzer, SanctifyConfig, SizeWarningLevel};
 use serde_json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{debug, error, info, warn};
 
 use crate::vulndb::{VulnDatabase, VulnMatch};
 
@@ -47,32 +48,17 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&err)?);
         } else {
-            eprintln!(
-                "{} Error: {:?} is not a valid Soroban project. (Missing Cargo.toml with 'soroban-sdk' dependency)",
-                "❌".red(),
-                path
+            error!(
+                target: "sanctifier",
+                path = %path.display(),
+                "Invalid Soroban project: missing Cargo.toml with a soroban-sdk dependency"
             );
         }
         std::process::exit(1);
     }
 
-    if is_json {
-        eprintln!(
-            "{} Sanctifier: Valid Soroban project found at {:?}",
-            "✨".green(),
-            path
-        );
-        eprintln!("{} Analyzing contract at {:?}...", "🔍".blue(), path);
-    } else {
-        println!(
-            "{} Sanctifier: Valid Soroban project found at {:?}",
-            "✨".green(),
-            path
-        );
-        println!("{} Analyzing contract at {:?}...", "🔍".blue(), path);
-        use std::io::{self, Write};
-        io::stdout().flush().ok();
-    }
+    info!(target: "sanctifier", path = %path.display(), "Valid Soroban project found");
+    info!(target: "sanctifier", path = %path.display(), "Analyzing contract");
 
     let mut config = load_config(path);
     config.ledger_limit = args.limit; // Apply CLI limit to config
@@ -81,24 +67,21 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     // Load vulnerability database
     let vuln_db = match &args.vuln_db {
         Some(db_path) => {
-            if !is_json {
-                println!(
-                    "{} Loading custom vulnerability database from {:?}",
-                    "📦".blue(),
-                    db_path
-                );
-            }
+            info!(
+                target: "sanctifier",
+                path = %db_path.display(),
+                "Loading custom vulnerability database"
+            );
             VulnDatabase::load(db_path)?
         }
         None => {
-            if !is_json {
-                println!(
-                    "{} Loading built-in vulnerability database (v{})",
-                    "📦".blue(),
-                    VulnDatabase::load_default().version
-                );
-            }
-            VulnDatabase::load_default()
+            let database = VulnDatabase::load_default();
+            info!(
+                target: "sanctifier",
+                version = %database.version,
+                "Loading built-in vulnerability database"
+            );
+            database
         }
     };
 
@@ -136,6 +119,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
         if let Ok(content) = fs::read_to_string(path) {
             let file_name = path.display().to_string();
+            debug!(target: "sanctifier", file = %file_name, "Scanning Rust source file");
             collisions.extend(analyzer.scan_storage_collisions(&content));
             size_warnings.extend(analyzer.analyze_ledger_size(&content));
             unsafe_patterns.extend(analyzer.analyze_unsafe_patterns(&content));
@@ -190,7 +174,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     };
 
     if let Err(err) = send_scan_completed_webhooks(&args.webhook_urls, &webhook_payload) {
-        eprintln!("⚠️ Failed to initialize webhook client: {}", err);
+        warn!(target: "sanctifier", error = %err, "Failed to initialize webhook client");
     }
 
     if is_json {
@@ -585,6 +569,7 @@ fn walk_dir(
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             if let Ok(content) = fs::read_to_string(&path) {
                 let file_name = path.display().to_string();
+                debug!(target: "sanctifier", file = %file_name, "Scanning Rust source file");
 
                 let mut c = analyzer.scan_storage_collisions(&content);
                 for i in &mut c {

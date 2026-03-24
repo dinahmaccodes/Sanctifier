@@ -3,9 +3,10 @@ use colored::*;
 use sanctifier_core::{callgraph_to_dot, Analyzer, SanctifyConfig};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::error;
 
-mod branding;
 mod commands;
+mod logging;
 pub mod vulndb;
 
 #[derive(Parser)]
@@ -46,14 +47,14 @@ pub enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let log_output = match &cli.command {
+        Commands::Analyze(args) if args.format == "json" => logging::LogOutput::Json,
+        _ => logging::LogOutput::Text,
+    };
+    logging::init(log_output)?;
 
     match cli.command {
-        Commands::Analyze(args) => {
-            if args.format != "json" {
-                branding::print_logo();
-            }
-            commands::analyze::exec(args)?;
-        }
+        Commands::Analyze(args) => commands::analyze::exec(args)?,
         Commands::Badge(args) => {
             commands::badge::exec(args)?;
         }
@@ -102,7 +103,12 @@ fn main() -> anyhow::Result<()> {
 
             let dot = callgraph_to_dot(&edges);
             if let Err(e) = fs::write(&output, dot) {
-                eprintln!("{} Failed to write DOT file: {}", "❌".red(), e);
+                error!(
+                    target: "sanctifier",
+                    output = %output.display(),
+                    error = %e,
+                    "Failed to write DOT file"
+                );
                 std::process::exit(1);
             }
             println!(
