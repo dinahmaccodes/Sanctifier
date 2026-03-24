@@ -5,6 +5,7 @@ pub mod gas_estimator;
 pub mod gas_report;
 pub mod patcher;
 pub mod rules;
+pub mod sep41;
 pub mod smt;
 mod storage_collision;
 use std::collections::HashSet;
@@ -13,6 +14,7 @@ use syn::visit::{self, Visit};
 use syn::{parse_str, Fields, File, Item, Meta, Type};
 
 pub use rules::{Rule, RuleRegistry, RuleViolation, Severity};
+pub use sep41::{Sep41Issue, Sep41IssueKind, Sep41VerificationReport};
 
 // Redundant imports removed
 use crate::rules::arithmetic_overflow::ArithVisitor;
@@ -119,6 +121,19 @@ struct UnhandledResultVisitor {
 
 struct UnsafeVisitor {
     patterns: Vec<UnsafePattern>,
+}
+
+#[derive(Default)]
+struct FunctionSecuritySummary {
+    has_mutation: bool,
+    has_auth: bool,
+    has_external_call: bool,
+}
+
+impl FunctionSecuritySummary {
+    fn has_sensitive_action(&self) -> bool {
+        self.has_mutation || self.has_external_call
+    }
 }
 
 impl<'ast> Visit<'ast> for UnsafeVisitor {
@@ -375,6 +390,10 @@ impl Analyzer {
         with_panic_guard(|| self.analyze_upgrade_patterns_impl(source))
     }
 
+    pub fn verify_sep41_interface(&self, source: &str) -> Sep41VerificationReport {
+        with_panic_guard(|| sep41::verify(source))
+    }
+
     fn analyze_upgrade_patterns_impl(&self, source: &str) -> UpgradeReport {
         let file = match parse_str::<File>(source) {
             Ok(f) => f,
@@ -435,14 +454,61 @@ impl Analyzer {
         with_panic_guard(|| self.scan_auth_gaps_impl(source))
     }
 
-    pub fn verify_smt_invariants(&self, _source: &str) -> Vec<smt::SmtInvariantIssue> {
-        with_panic_guard(|| self.verify_smt_invariants_impl())
+    pub fn verify_smt_invariants(&self, source: &str) -> Vec<smt::SmtInvariantIssue> {
+        with_panic_guard(|| self.verify_smt_invariants_impl(source))
     }
 
-    fn verify_smt_invariants_impl(&self) -> Vec<smt::SmtInvariantIssue> {
-        // In a full implementation, this would dynamically parse the AST to extract invariants.
-        // For now, we return an empty vector to avoid false positives in general analysis.
-        Vec::new()
+    fn verify_smt_invariants_impl(&self, source: &str) -> Vec<smt::SmtInvariantIssue> {
+        let file = match parse_str::<File>(source) {
+            Ok(f) => f,
+            Err(_) => return vec![],
+        };
+
+        let mut issues = Vec::new();
+
+        for item in &file.items {
+            match item {
+                Item::Impl(i) => {
+                    for impl_item in &i.items {
+                        if let syn::ImplItem::Fn(f) = impl_item {
+                            if !matches!(f.vis, syn::Visibility::Public(_)) {
+                                continue;
+                            }
+
+                            let mut summary = FunctionSecuritySummary::default();
+                            self.check_fn_body(&f.block, &mut summary);
+
+                            if summary.has_external_call {
+                                issues.push(smt::SmtInvariantIssue {
+                                    function_name: f.sig.ident.to_string(),
+                                    description: "Security-property validation is inconclusive across external contract calls; isolate the pure logic or model the callee explicitly before relying on the proof.".to_string(),
+                                    location: f.sig.ident.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                Item::Fn(f) => {
+                    if !matches!(f.vis, syn::Visibility::Public(_)) {
+                        continue;
+                    }
+
+                    let mut summary = FunctionSecuritySummary::default();
+                    self.check_fn_body(&f.block, &mut summary);
+
+                    if summary.has_external_call {
+                        issues.push(smt::SmtInvariantIssue {
+                            function_name: f.sig.ident.to_string(),
+                            description: "Security-property validation is inconclusive across external contract calls; isolate the pure logic or model the callee explicitly before relying on the proof.".to_string(),
+                            location: f.sig.ident.to_string(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        issues
     }
 
     pub fn scan_gas_estimation(&self, source: &str) -> Vec<gas_estimator::GasEstimationReport> {
@@ -468,16 +534,9 @@ impl Analyzer {
                     if let syn::ImplItem::Fn(f) = impl_item {
                         if let syn::Visibility::Public(_) = f.vis {
                             let fn_name = f.sig.ident.to_string();
-                            let mut has_mutation = false;
-                            let mut has_read = false;
-                            let mut has_auth = false;
-                            self.check_fn_body(
-                                &f.block,
-                                &mut has_mutation,
-                                &mut has_read,
-                                &mut has_auth,
-                            );
-                            if has_mutation && !has_read && !has_auth {
+                            let mut summary = FunctionSecuritySummary::default();
+                            self.check_fn_body(&f.block, &mut summary);
+                            if summary.has_sensitive_action() && !summary.has_auth {
                                 gaps.push(fn_name);
                             }
                         }
@@ -592,26 +651,20 @@ impl Analyzer {
 
     // ── Mutation / auth helpers ───────────────────────────────────────────────
 
-    fn check_fn_body(
-        &self,
-        block: &syn::Block,
-        has_mutation: &mut bool,
-        has_read: &mut bool,
-        has_auth: &mut bool,
-    ) {
+    fn check_fn_body(&self, block: &syn::Block, summary: &mut FunctionSecuritySummary) {
         for stmt in &block.stmts {
             match stmt {
-                syn::Stmt::Expr(expr, _) => self.check_expr(expr, has_mutation, has_read, has_auth),
+                syn::Stmt::Expr(expr, _) => self.check_expr(expr, summary),
                 syn::Stmt::Local(local) => {
                     if let Some(init) = &local.init {
-                        self.check_expr(&init.expr, has_mutation, has_read, has_auth);
+                        self.check_expr(&init.expr, summary);
                     }
                 }
                 syn::Stmt::Macro(m) => {
                     if m.mac.path.is_ident("require_auth")
                         || m.mac.path.is_ident("require_auth_for_args")
                     {
-                        *has_auth = true;
+                        summary.has_auth = true;
                     }
                 }
                 _ => {}
@@ -619,25 +672,19 @@ impl Analyzer {
         }
     }
 
-    fn check_expr(
-        &self,
-        expr: &syn::Expr,
-        has_mutation: &mut bool,
-        has_read: &mut bool,
-        has_auth: &mut bool,
-    ) {
+    fn check_expr(&self, expr: &syn::Expr, summary: &mut FunctionSecuritySummary) {
         match expr {
             syn::Expr::Call(c) => {
                 if let syn::Expr::Path(p) = &*c.func {
                     if let Some(segment) = p.path.segments.last() {
                         let ident = segment.ident.to_string();
                         if ident == "require_auth" || ident == "require_auth_for_args" {
-                            *has_auth = true;
+                            summary.has_auth = true;
                         }
                     }
                 }
                 for arg in &c.args {
-                    self.check_expr(arg, has_mutation, has_read, has_auth);
+                    self.check_expr(arg, summary);
                 }
             }
             syn::Expr::MethodCall(m) => {
@@ -650,39 +697,32 @@ impl Analyzer {
                         || receiver_str.contains("temporary")
                         || receiver_str.contains("instance")
                     {
-                        *has_mutation = true;
-                    }
-                }
-                if method_name == "get" {
-                    let receiver_str = quote::quote!(#m.receiver).to_string();
-                    if receiver_str.contains("storage")
-                        || receiver_str.contains("persistent")
-                        || receiver_str.contains("temporary")
-                        || receiver_str.contains("instance")
-                    {
-                        *has_read = true;
+                        summary.has_mutation = true;
                     }
                 }
                 if method_name == "require_auth" || method_name == "require_auth_for_args" {
-                    *has_auth = true;
+                    summary.has_auth = true;
                 }
-                self.check_expr(&m.receiver, has_mutation, has_read, has_auth);
+                if is_external_contract_method_call(m) {
+                    summary.has_external_call = true;
+                }
+                self.check_expr(&m.receiver, summary);
                 for arg in &m.args {
-                    self.check_expr(arg, has_mutation, has_read, has_auth);
+                    self.check_expr(arg, summary);
                 }
             }
-            syn::Expr::Block(b) => self.check_fn_body(&b.block, has_mutation, has_read, has_auth),
+            syn::Expr::Block(b) => self.check_fn_body(&b.block, summary),
             syn::Expr::If(i) => {
-                self.check_expr(&i.cond, has_mutation, has_read, has_auth);
-                self.check_fn_body(&i.then_branch, has_mutation, has_read, has_auth);
+                self.check_expr(&i.cond, summary);
+                self.check_fn_body(&i.then_branch, summary);
                 if let Some((_, else_expr)) = &i.else_branch {
-                    self.check_expr(else_expr, has_mutation, has_read, has_auth);
+                    self.check_expr(else_expr, summary);
                 }
             }
             syn::Expr::Match(m) => {
-                self.check_expr(&m.expr, has_mutation, has_read, has_auth);
+                self.check_expr(&m.expr, summary);
                 for arm in &m.arms {
-                    self.check_expr(&arm.body, has_mutation, has_read, has_auth);
+                    self.check_expr(&arm.body, summary);
                 }
             }
             _ => {}
@@ -1225,6 +1265,57 @@ fn simplify_expr_string(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn is_external_contract_method_call(method_call: &syn::ExprMethodCall) -> bool {
+    if method_call.method == "invoke_contract" {
+        return true;
+    }
+
+    receiver_looks_like_external_client(&method_call.receiver)
+}
+
+fn receiver_looks_like_external_client(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Call(call) => {
+            if let syn::Expr::Path(path) = &*call.func {
+                return path_looks_like_client_constructor(&path.path);
+            }
+            false
+        }
+        syn::Expr::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| ident_looks_like_client(&segment.ident.to_string()))
+            .unwrap_or(false),
+        syn::Expr::Reference(reference) => receiver_looks_like_external_client(&reference.expr),
+        syn::Expr::Paren(paren) => receiver_looks_like_external_client(&paren.expr),
+        syn::Expr::Group(group) => receiver_looks_like_external_client(&group.expr),
+        _ => false,
+    }
+}
+
+fn path_looks_like_client_constructor(path: &syn::Path) -> bool {
+    let mut saw_client_type = false;
+
+    for segment in &path.segments {
+        let ident = segment.ident.to_string();
+        if ident_looks_like_client(&ident) {
+            saw_client_type = true;
+        }
+
+        if ident == "new" && saw_client_type {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn ident_looks_like_client(ident: &str) -> bool {
+    let lower = ident.to_lowercase();
+    lower.ends_with("client") || lower.ends_with("_client")
+}
+
 // ── EventVisitor (stubs/helpers moved) ──────────────────────────────────────
 
 impl<'ast> Visit<'ast> for UnhandledResultVisitor {
@@ -1595,6 +1686,85 @@ mod tests {
         let gaps = analyzer.scan_auth_gaps(source);
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0], "set_data");
+    }
+
+    #[test]
+    fn test_scan_auth_gaps_flags_read_modify_write_without_auth() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            #[contractimpl]
+            impl Token {
+                pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+                    let from_balance: i128 = env.storage().persistent().get(&from).unwrap_or(0);
+                    let to_balance: i128 = env.storage().persistent().get(&to).unwrap_or(0);
+
+                    env.storage().persistent().set(&from, &(from_balance - amount));
+                    env.storage().persistent().set(&to, &(to_balance + amount));
+                }
+
+                pub fn transfer_secure(env: Env, from: Address, to: Address, amount: i128) {
+                    from.require_auth();
+
+                    let from_balance: i128 = env.storage().persistent().get(&from).unwrap_or(0);
+                    let to_balance: i128 = env.storage().persistent().get(&to).unwrap_or(0);
+
+                    env.storage().persistent().set(&from, &(from_balance - amount));
+                    env.storage().persistent().set(&to, &(to_balance + amount));
+                }
+            }
+        "#;
+
+        let gaps = analyzer.scan_auth_gaps(source);
+        assert_eq!(gaps, vec!["transfer".to_string()]);
+    }
+
+    #[test]
+    fn test_scan_auth_gaps_flags_external_contract_calls_without_auth() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            #[contractimpl]
+            impl Router {
+                pub fn forward(env: Env, target: Address, to: Address, amount: i128) {
+                    let fn_name = Symbol::new(&env, "transfer");
+                    env.invoke_contract::<()>(&target, &fn_name, (&to, &amount));
+                }
+
+                pub fn forward_secure(env: Env, target: Address, admin: Address, to: Address, amount: i128) {
+                    admin.require_auth();
+                    let fn_name = Symbol::new(&env, "transfer");
+                    env.invoke_contract::<()>(&target, &fn_name, (&to, &amount));
+                }
+            }
+        "#;
+
+        let gaps = analyzer.scan_auth_gaps(source);
+        assert_eq!(gaps, vec!["forward".to_string()]);
+    }
+
+    #[test]
+    fn test_verify_smt_invariants_reports_external_contract_boundaries() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            #[contractimpl]
+            impl Settlement {
+                pub fn settle(env: Env, market: Address, amount: i128) {
+                    let fn_name = Symbol::new(&env, "settle_position");
+                    env.invoke_contract::<()>(&market, &fn_name, (&amount,));
+                }
+
+                pub fn local_only(env: Env, amount: i128) {
+                    env.storage().instance().set(&symbol_short!("amount"), &amount);
+                }
+            }
+        "#;
+
+        let issues = analyzer.verify_smt_invariants(source);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].function_name, "settle");
+        assert!(
+            issues[0].description.contains("external contract calls"),
+            "expected external-call proof boundary warning"
+        );
     }
 
     #[test]

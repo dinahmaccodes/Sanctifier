@@ -97,6 +97,8 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     let mut unhandled_results = Vec::new();
     let mut upgrade_reports = Vec::new();
     let mut smt_issues = Vec::new();
+    let mut sep41_checked_contracts = Vec::new();
+    let mut sep41_issues = Vec::new();
 
     if path.is_dir() {
         walk_dir(
@@ -115,6 +117,8 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             &mut unhandled_results,
             &mut upgrade_reports,
             &mut smt_issues,
+            &mut sep41_checked_contracts,
+            &mut sep41_issues,
         )?;
     } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
         if let Ok(content) = fs::read_to_string(path) {
@@ -133,6 +137,15 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             unhandled_results.extend(analyzer.scan_unhandled_results(&content));
             upgrade_reports.push(analyzer.analyze_upgrade_patterns(&content));
             smt_issues.extend(analyzer.verify_smt_invariants(&content));
+
+            let sep41_report = analyzer.verify_sep41_interface(&content);
+            if sep41_report.candidate {
+                sep41_checked_contracts.push(file_name.clone());
+                for mut issue in sep41_report.issues {
+                    issue.location = format!("{}:{}", file_name, issue.location);
+                    sep41_issues.push(issue);
+                }
+            }
         }
     }
 
@@ -149,13 +162,15 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             .iter()
             .map(|r| r.findings.len())
             .sum::<usize>()
-        + smt_issues.len();
+        + smt_issues.len()
+        + sep41_issues.len();
 
     let has_critical =
         !auth_gaps.is_empty() || panic_issues.iter().any(|p| p.issue_type == "panic!");
     let has_high = !arithmetic_issues.is_empty()
         || !panic_issues.is_empty()
         || !smt_issues.is_empty()
+        || !sep41_issues.is_empty()
         || !unhandled_results.is_empty()
         || size_warnings
             .iter()
@@ -190,6 +205,8 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             "unhandled_results": unhandled_results,
             "upgrade_reports": upgrade_reports,
             "smt_issues": smt_issues,
+            "sep41_checked_contracts": sep41_checked_contracts,
+            "sep41_issues": sep41_issues,
             "vulnerability_db_matches": vuln_matches,
             "vulnerability_db_version": vuln_db.version,
             "metadata": {
@@ -211,6 +228,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
                 "event_issues": event_issues.len(),
                 "unhandled_results": unhandled_results.len(),
                 "smt_issues": smt_issues.len(),
+                "sep41_issues": sep41_issues.len(),
                 "has_critical": has_critical,
                 "has_high": has_high,
             },
@@ -286,6 +304,15 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
                     "function_name": s.function_name,
                     "description": s.description,
                     "location": s.location,
+                })).collect::<Vec<_>>(),
+                "sep41_issues": sep41_issues.iter().map(|issue| serde_json::json!({
+                    "code": finding_codes::SEP41_INTERFACE_DEVIATION,
+                    "function_name": issue.function_name,
+                    "kind": issue.kind,
+                    "location": issue.location,
+                    "message": issue.message,
+                    "expected_signature": issue.expected_signature,
+                    "actual_signature": issue.actual_signature,
                 })).collect::<Vec<_>>(),
             },
         });
@@ -444,6 +471,27 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         }
     }
 
+    if !sep41_checked_contracts.is_empty() && sep41_issues.is_empty() {
+        println!("{} SEP-41 token interface verified exactly.", "✅".green());
+    } else if !sep41_issues.is_empty() {
+        println!("\n{} Found SEP-41 Interface Deviations!", "⚠️".yellow());
+        for issue in &sep41_issues {
+            println!(
+                "   {} [{}] Function: {}",
+                "->".red(),
+                finding_codes::SEP41_INTERFACE_DEVIATION.bold(),
+                issue.function_name.bold()
+            );
+            println!("      Kind: {:?}", issue.kind);
+            println!("      Location: {}", issue.location);
+            println!("      Message: {}", issue.message);
+            println!("      Expected: {}", issue.expected_signature);
+            if let Some(actual) = &issue.actual_signature {
+                println!("      Actual: {}", actual);
+            }
+        }
+    }
+
     // Vulnerability database matches
     if vuln_matches.is_empty() {
         println!(
@@ -534,6 +582,8 @@ fn walk_dir(
     unhandled_results: &mut Vec<sanctifier_core::UnhandledResultIssue>,
     upgrade_reports: &mut Vec<sanctifier_core::UpgradeReport>,
     smt_issues: &mut Vec<sanctifier_core::smt::SmtInvariantIssue>,
+    sep41_checked_contracts: &mut Vec<String>,
+    sep41_issues: &mut Vec<sanctifier_core::Sep41Issue>,
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -565,6 +615,8 @@ fn walk_dir(
                 unhandled_results,
                 upgrade_reports,
                 smt_issues,
+                sep41_checked_contracts,
+                sep41_issues,
             )?;
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             if let Ok(content) = fs::read_to_string(&path) {
@@ -635,6 +687,15 @@ fn walk_dir(
                     i.location = format!("{}:{}", file_name, i.location);
                 }
                 smt_issues.extend(smt);
+
+                let sep41_report = analyzer.verify_sep41_interface(&content);
+                if sep41_report.candidate {
+                    sep41_checked_contracts.push(file_name.clone());
+                    for mut issue in sep41_report.issues {
+                        issue.location = format!("{}:{}", file_name, issue.location);
+                        sep41_issues.push(issue);
+                    }
+                }
             }
         }
     }
