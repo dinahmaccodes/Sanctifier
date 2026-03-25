@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import type { AnalysisReport, Finding, Severity } from "../types";
-import { transformReport } from "../lib/transform";
+import type { CallGraphNode, CallGraphEdge, Finding, Severity } from "../types";
+import { transformReport, extractCallGraph, normalizeReport } from "../lib/transform";
 import { exportToPdf } from "../lib/export-pdf";
 import { SeverityFilter } from "../components/SeverityFilter";
 import { FindingsList } from "../components/FindingsList";
 import { SummaryChart } from "../components/SummaryChart";
+import { SanctityScore } from "../components/SanctityScore";
+import { CallGraph } from "../components/CallGraph";
 import { ThemeToggle } from "../components/ThemeToggle";
 import Link from "next/link";
 
@@ -18,22 +20,60 @@ const SAMPLE_JSON = `{
   "arithmetic_issues": []
 }`;
 
+type Tab = "findings" | "callgraph";
+
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  if (typeof payload === "string" && payload.trim()) {
+    return payload;
+  }
+
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "error" in payload &&
+    typeof payload.error === "string"
+  ) {
+    return payload.error;
+  }
+
+  return fallback;
+}
+
 export default function DashboardPage() {
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [callGraphNodes, setCallGraphNodes] = useState<CallGraphNode[]>([]);
+  const [callGraphEdges, setCallGraphEdges] = useState<CallGraphEdge[]>([]);
   const [severityFilter, setSeverityFilter] = useState<Severity | "all">("all");
   const [error, setError] = useState<string | null>(null);
   const [jsonInput, setJsonInput] = useState("");
+  const [activeTab, setActiveTab] = useState<Tab>("findings");
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [isUploadingContract, setIsUploadingContract] = useState(false);
 
-  const loadReport = useCallback(() => {
+  const applyReport = useCallback((rawReport: unknown) => {
+    const report = normalizeReport(rawReport);
+    setFindings(transformReport(report));
+    const { nodes, edges } = extractCallGraph(report);
+    setCallGraphNodes(nodes);
+    setCallGraphEdges(edges);
+  }, []);
+
+  const parseReport = useCallback((text: string) => {
     setError(null);
+    setUploadStatus(null);
     try {
-      const parsed = JSON.parse(jsonInput || SAMPLE_JSON) as AnalysisReport;
-      setFindings(transformReport(parsed));
+      applyReport(JSON.parse(text || SAMPLE_JSON));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Invalid JSON");
       setFindings([]);
+      setCallGraphNodes([]);
+      setCallGraphEdges([]);
     }
-  }, [jsonInput]);
+  }, [applyReport]);
+
+  const loadReport = useCallback(() => {
+    parseReport(jsonInput);
+  }, [jsonInput, parseReport]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -42,49 +82,116 @@ export default function DashboardPage() {
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       setJsonInput(text);
-      setError(null);
-      try {
-        const parsed = JSON.parse(text) as AnalysisReport;
-        setFindings(transformReport(parsed));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Invalid JSON");
-      }
+      parseReport(text);
     };
     reader.readAsText(file);
     e.target.value = "";
-  }, []);
+  }, [parseReport]);
+
+  const handleContractUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    setError(null);
+    setUploadStatus(`Analyzing ${file.name}...`);
+    setIsUploadingContract(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("contract", file);
+
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        body: formData,
+      });
+      const rawBody = await response.text();
+
+      let payload: unknown = null;
+      if (rawBody) {
+        try {
+          payload = JSON.parse(rawBody);
+        } catch {
+          payload = rawBody;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(payload, "Contract analysis failed"));
+      }
+
+      setJsonInput(JSON.stringify(payload, null, 2));
+      applyReport(payload);
+      setUploadStatus(`Analysis report ready for ${file.name}.`);
+    } catch (uploadError) {
+      setUploadStatus(null);
+      setError(
+        uploadError instanceof Error ? uploadError.message : "Contract analysis failed"
+      );
+    } finally {
+      setIsUploadingContract(false);
+    }
+  }, [applyReport]);
+
+  const hasData = findings.length > 0;
+  const hasLoadedReport = jsonInput.trim().length > 0;
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <Link href="/" className="font-bold text-lg">
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 theme-high-contrast:bg-black theme-high-contrast:text-white">
+      <header className="border-b border-zinc-200 dark:border-zinc-800 theme-high-contrast:border-b-white bg-white dark:bg-zinc-900 theme-high-contrast:bg-black px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-4 sm:gap-6">
+          <Link href="/" className="font-bold text-lg theme-high-contrast:text-yellow-300 whitespace-nowrap">
             Sanctifier
           </Link>
-          <span className="text-zinc-500 dark:text-zinc-400">Security Dashboard</span>
+          <span className="text-zinc-500 dark:text-zinc-400 theme-high-contrast:text-white text-sm sm:text-base">Security Dashboard</span>
         </div>
-        <ThemeToggle />
+        <div className="flex items-center gap-4">
+          <Link
+            href="/terminal"
+            className="text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-zinc-50 transition-colors"
+          >
+            Live Terminal
+          </Link>
+          <ThemeToggle />
+        </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
-        <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6">
-          <h2 className="text-lg font-semibold mb-4">Load Analysis Report</h2>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">
-            Paste JSON from <code className="bg-zinc-100 dark:bg-zinc-800 px-1 rounded">sanctifier analyze --format json</code> or upload a file.
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+        <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 theme-high-contrast:border-white bg-white dark:bg-zinc-900 theme-high-contrast:bg-black p-6">
+          <h2 className="text-lg font-semibold mb-4 theme-high-contrast:text-yellow-300">Load Analysis Report</h2>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 theme-high-contrast:text-white mb-4">
+            Paste JSON from <code className="bg-zinc-100 dark:bg-zinc-800 theme-high-contrast:bg-zinc-900 px-1 rounded">sanctifier analyze --format json</code>, upload an existing report, or analyze a Rust contract source file.
           </p>
-          <div className="flex flex-wrap gap-4">
-            <label className="cursor-pointer rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800">
+          <div className="flex flex-wrap gap-2 sm:gap-4">
+            <label className="flex-1 sm:flex-none text-center cursor-pointer rounded-lg border border-zinc-300 dark:border-zinc-600 theme-high-contrast:border-white px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 theme-high-contrast:hover:bg-zinc-900">
               Upload JSON
               <input
                 type="file"
                 accept=".json"
                 className="hidden"
+                aria-label="JSON report file"
+                data-testid="json-upload-input"
                 onChange={handleFileUpload}
+              />
+            </label>
+            <label className="flex-1 sm:flex-none text-center cursor-pointer rounded-lg border border-zinc-300 dark:border-zinc-600 theme-high-contrast:border-white px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 theme-high-contrast:hover:bg-zinc-900">
+              {isUploadingContract ? "Analyzing Contract..." : "Upload Contract"}
+              <input
+                type="file"
+                accept=".rs"
+                className="hidden"
+                aria-label="Contract file"
+                data-testid="contract-upload-input"
+                onChange={handleContractUpload}
               />
             </label>
             <button
               onClick={loadReport}
-              className="rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200"
+              className="flex-1 sm:flex-none rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 theme-high-contrast:bg-white theme-high-contrast:text-black px-4 py-2 text-sm font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 theme-high-contrast:hover:bg-zinc-300"
             >
               Parse JSON
             </button>
@@ -92,12 +199,17 @@ export default function DashboardPage() {
               onClick={() => {
                 exportToPdf(findings);
               }}
-              disabled={findings.length === 0}
-              className="rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2 text-sm disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              disabled={!hasData}
+              className="flex-1 sm:flex-none rounded-lg border border-zinc-300 dark:border-zinc-600 theme-high-contrast:border-white px-4 py-2 text-sm disabled:opacity-50 hover:bg-zinc-100 dark:hover:bg-zinc-800 theme-high-contrast:hover:bg-zinc-900"
             >
               Export PDF
             </button>
           </div>
+          {uploadStatus && (
+            <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-400" role="status" aria-live="polite">
+              {uploadStatus}
+            </p>
+          )}
           {error && (
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
           )}
@@ -109,27 +221,66 @@ export default function DashboardPage() {
           />
         </section>
 
-        {findings.length > 0 && (
+        {hasData && (
           <>
-            <section>
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <SanctityScore findings={findings} />
               <SummaryChart findings={findings} />
             </section>
 
-            <section>
-              <h2 className="text-lg font-semibold mb-4">Filter by Severity</h2>
-              <SeverityFilter selected={severityFilter} onChange={setSeverityFilter} />
-            </section>
+            {/* Tab navigation */}
+            <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-700 theme-high-contrast:border-white">
+              <button
+                onClick={() => setActiveTab("findings")}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "findings"
+                    ? "border-zinc-900 dark:border-zinc-100 theme-high-contrast:border-yellow-300 text-zinc-900 dark:text-zinc-100 theme-high-contrast:text-yellow-300"
+                    : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 theme-high-contrast:text-white theme-high-contrast:hover:text-yellow-300"
+                  }`}
+              >
+                Findings
+              </button>
+              <button
+                onClick={() => setActiveTab("callgraph")}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "callgraph"
+                    ? "border-zinc-900 dark:border-zinc-100 theme-high-contrast:border-yellow-300 text-zinc-900 dark:text-zinc-100 theme-high-contrast:text-yellow-300"
+                    : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 theme-high-contrast:text-white theme-high-contrast:hover:text-yellow-300"
+                  }`}
+              >
+                Call Graph
+              </button>
+            </div>
 
-            <section>
-              <h2 className="text-lg font-semibold mb-4">Findings</h2>
-              <FindingsList findings={findings} severityFilter={severityFilter} />
-            </section>
+            {activeTab === "findings" && (
+              <>
+                <section>
+                  <h2 className="text-lg font-semibold mb-4">Filter by Severity</h2>
+                  <SeverityFilter selected={severityFilter} onChange={setSeverityFilter} />
+                </section>
+
+                <section>
+                  <h2 className="text-lg font-semibold mb-4">Findings</h2>
+                  <FindingsList findings={findings} severityFilter={severityFilter} />
+                </section>
+              </>
+            )}
+
+            {activeTab === "callgraph" && (
+              <section>
+                <CallGraph nodes={callGraphNodes} edges={callGraphEdges} />
+              </section>
+            )}
           </>
         )}
 
-        {findings.length === 0 && !error && (
+        {!hasData && !error && !hasLoadedReport && (
           <p className="text-center text-zinc-500 dark:text-zinc-400 py-12">
             Load a report to view findings.
+          </p>
+        )}
+
+        {!hasData && !error && hasLoadedReport && (
+          <p className="text-center text-zinc-500 dark:text-zinc-400 py-12">
+            No findings were detected in the loaded report.
           </p>
         )}
       </main>

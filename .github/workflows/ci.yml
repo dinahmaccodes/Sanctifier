@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: Continuous Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libz3-dev libdbus-1-dev
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run Clippy
+        run: |
+          cargo clippy -p sanctifier-core --all-targets --all-features -- -D warnings
+          cd tooling/sanctifier-cli && cargo clippy --all-targets -- -D warnings
+
+      - name: Build All (Debug)
+        run: |
+          cargo build -p sanctifier-core --all-features
+          cd tooling/sanctifier-cli && cargo build
+
+      - name: Run All Tests
+        run: |
+          cargo test -p sanctifier-core --all-features
+          cd tooling/sanctifier-cli && cargo test
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin || true
+
+      - name: Generate Coverage Report
+        run: cargo tarpaulin -p sanctifier-core --out Xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@0f8570b1a125f4937846a11fcfa3bcd548bd8c97 # v4.6.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: cobertura.xml
+          fail_ci_if_error: false
+          slug: HyperSafeD/Sanctifier
+
+      - name: Build Release CLI
+        run: cd tooling/sanctifier-cli && cargo build --release
