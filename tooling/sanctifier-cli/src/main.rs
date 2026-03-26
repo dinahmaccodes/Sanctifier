@@ -181,8 +181,19 @@ fn load_config(path: &Path) -> SanctifyConfig {
         let config_path = current.join(".sanctify.toml");
         if config_path.exists() {
             if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = toml::from_str(&content) {
-                    return config;
+                match toml::from_str(&content) {
+                    Ok(config) => return config,
+                    Err(e) => {
+                        eprintln!(
+                            "Error: Found .sanctify.toml at {} but it could not be parsed:\n  {}\n\
+                             \n\
+                             Run 'sanctifier init' to regenerate a valid config, or check the schema at:\n\
+                             https://github.com/HyperSafeD/Sanctifier/blob/main/schemas/sanctify-config.schema.json",
+                            config_path.display(),
+                            e
+                        );
+                        std::process::exit(1);
+                    }
                 }
             }
         }

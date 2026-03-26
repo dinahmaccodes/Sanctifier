@@ -11,6 +11,8 @@ pub mod auth_gap;
 pub mod ledger_size;
 /// Panic / unwrap detection.
 pub mod panic_detection;
+/// Shadow storage pattern detection.
+pub mod shadow_storage;
 /// Unhandled `Result` values.
 pub mod unhandled_result;
 /// Unused local variables.
@@ -167,6 +169,7 @@ impl RuleRegistry {
         registry.register(arithmetic_overflow::ArithmeticOverflowRule::new());
         registry.register(unhandled_result::UnhandledResultRule::new());
         registry.register(unused_variable::UnusedVariableRule::new());
+        registry.register(shadow_storage::ShadowStorageRule::new());
         registry
     }
 }
