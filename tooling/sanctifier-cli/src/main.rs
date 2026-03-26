@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 use clap::{Parser, Subcommand};
 use colored::*;
 use sanctifier_core::{callgraph_to_dot, Analyzer, SanctifyConfig};
@@ -27,6 +29,8 @@ pub enum Commands {
     Report(commands::report::ReportArgs),
     /// Initialize Sanctifier in a new project
     Init(commands::init::InitArgs),
+    /// Show per-contract complexity metrics (cyclomatic complexity, nesting, LOC)
+    Complexity(commands::complexity::ComplexityArgs),
     /// Generate a Graphviz DOT call graph of cross-contract calls (env.invoke_contract)
     Callgraph {
         /// Path to a contract directory, workspace directory, or a single .rs file
@@ -41,7 +45,14 @@ pub enum Commands {
     Update,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {}", err);
+        std::process::exit(2);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let log_output = match &cli.command {
         Commands::Analyze(args) if args.format == "json" => logging::LogOutput::Json,
@@ -54,11 +65,15 @@ fn main() -> anyhow::Result<()> {
         Commands::Badge(args) => {
             commands::badge::exec(args)?;
         }
+        Commands::Complexity(args) => {
+            commands::complexity::exec(args)?;
+        }
         Commands::Report(args) => {
             commands::report::exec(args)?;
         }
         Commands::Init(args) => {
-            commands::init::exec(args, None)?;
+            let path = Some(args.path.clone());
+            commands::init::exec(args, path)?;
         }
         Commands::Callgraph { path, output } => {
             let config = load_config(&path);

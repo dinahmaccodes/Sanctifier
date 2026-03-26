@@ -38,6 +38,8 @@ pub mod patcher;
 pub mod rules;
 /// SEP-41 token-interface verification.
 pub mod sep41;
+/// Contract complexity metrics and reports.
+pub mod complexity;
 /// Z3 SMT solver integration for formal verification.
 /// Only available when the `smt` feature is enabled (default).
 #[cfg(feature = "smt")]
@@ -67,6 +69,7 @@ use syn::{parse_str, Fields, File, Item, Meta, Type};
 
 pub use rules::{Rule, RuleRegistry, RuleViolation, Severity};
 pub use sep41::{Sep41Issue, Sep41IssueKind, Sep41VerificationReport};
+pub use complexity::{analyze_complexity, analyze_complexity_from_source, render_text_report};
 
 // Redundant imports removed
 use crate::rules::arithmetic_overflow::ArithVisitor;

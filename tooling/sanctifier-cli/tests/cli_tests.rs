@@ -435,8 +435,6 @@ fn test_json_output_validates_against_schema() {
             messages.join("\n")
         );
     }
-
-}
 }
 
 #[test]
@@ -504,8 +502,8 @@ fn test_analyze_json_parsable_output() {
         serde_json::from_str(&stdout).expect("JSON output should be valid JSON");
 
     assert!(parsed["schema_version"].is_string(), "JSON should contain schema_version");
-    assert!(parsed["findings"].is_array(), "JSON should contain findings array");
-    assert!(parsed["file_path"].is_string(), "JSON should contain file_path");
+    assert!(parsed["findings"].is_object(), "JSON should contain findings object");
+    assert!(parsed["metadata"]["project_path"].is_string(), "JSON should contain metadata.project_path");
 }
 
 #[test]
@@ -521,6 +519,48 @@ fn test_analyze_exit_code_on_buggy_fixture() {
         .env_remove("RUST_LOG")
         .assert()
         .code(1);
+}
+
+#[test]
+fn test_analyze_exit_code_on_buggy_fixture_json() {
+    let mut cmd = Command::cargo_bin("sanctifier").unwrap();
+    let fixture_path = env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/vulnerable_contract.rs");
+
+    cmd.arg("analyze")
+        .arg(fixture_path)
+        .arg("--format")
+        .arg("json")
+        .arg("--exit-code")
+        .env_remove("RUST_LOG")
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn test_analyze_exit_code_flag_not_set_does_not_fail() {
+    let mut cmd = Command::cargo_bin("sanctifier").unwrap();
+    let fixture_path = env::current_dir()
+        .unwrap()
+        .join("tests/fixtures/vulnerable_contract.rs");
+
+    cmd.arg("analyze")
+        .arg(fixture_path)
+        .env_remove("RUST_LOG")
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_analyze_invalid_project_returns_2() {
+    let mut cmd = Command::cargo_bin("sanctifier").unwrap();
+    cmd.arg("analyze")
+        .arg("does-not-exist")
+        .arg("--exit-code")
+        .env_remove("RUST_LOG")
+        .assert()
+        .code(2);
 }
 
 #[test]
