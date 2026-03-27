@@ -274,10 +274,9 @@ fn has_attr(attrs: &[syn::Attribute], name: &str) -> bool {
 
 /// Returns `true` when `attrs` contains `#[cfg(test)]`.
 fn is_cfg_test_attrs(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg")
-            && quote::quote!(#a).to_string().contains("test")
-    })
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("cfg") && quote::quote!(#a).to_string().contains("test"))
 }
 
 fn is_upgrade_or_admin_fn(name: &str) -> bool {
@@ -1527,8 +1526,10 @@ fn ident_looks_like_client(ident: &str) -> bool {
 }
 
 fn method_looks_read_only(method_name: &str) -> bool {
-    matches!(method_name, "balance" | "paused" | "allowance" | "decimals" | "name" | "symbol")
-        || method_name.starts_with("get_")
+    matches!(
+        method_name,
+        "balance" | "paused" | "allowance" | "decimals" | "name" | "symbol"
+    ) || method_name.starts_with("get_")
         || method_name.starts_with("is_")
         || method_name.starts_with("has_")
 }
