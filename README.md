@@ -25,6 +25,7 @@ and optionally proves invariants with Z3.
 - [CLI Reference](#-cli-reference)
 - [Example JSON Output](#-example-json-output)
 - [JSON Schema](#-json-schema)
+- [GitHub Action](#-github-action)
 - [Project Structure](#-project-structure)
 - [Configuration](#-configuration)
 - [Add a Sanctifier Badge to Your Project](#-add-a-sanctifier-badge-to-your-project)
@@ -353,6 +354,44 @@ Downstream tools (dashboards, IDE plugins, CI integrations) can use the schema t
 The `schema_version` field in every report (e.g. `"1.0.0"`) is bumped independently
 of the Sanctifier tool version whenever the output shape changes, so consumers can
 guard on it without coupling to the CLI release cycle.
+
+---
+
+## 🤖 GitHub Action
+
+Sanctifier ships a composite GitHub Action (`action.yml`) so CI consumers can
+integrate with a few lines.
+
+```yaml
+name: Sanctifier Scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Sanctifier
+        uses: HyperSafeD/Sanctifier@main
+        with:
+          path: .
+          format: sarif
+          min-severity: high
+          upload-sarif: "true"
+          sarif-output: sanctifier-results.sarif
+```
+
+When `format: sarif` and `upload-sarif: "true"`, the action uploads the SARIF
+file via `github/codeql-action/upload-sarif@v3` so findings appear in GitHub
+code scanning.
 
 ---
 
