@@ -49,7 +49,6 @@ pub enum Commands {
     Update,
     /// Detect reentrancy vulnerabilities (state mutation before external call)
     Reentrancy(commands::reentrancy::ReentrancyArgs),
-
 }
 
 fn main() {
@@ -145,8 +144,6 @@ fn run() -> anyhow::Result<()> {
         }
         Commands::Reentrancy(args) => {
             commands::reentrancy::exec(args)?;
-        }
-
         }
     }
 

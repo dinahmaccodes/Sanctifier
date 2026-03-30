@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 use anyhow::{bail, Context};
 use clap::Args;
 use colored::Colorize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
@@ -52,7 +53,11 @@ pub fn exec(args: VerifyArgs) -> anyhow::Result<()> {
 
     info!(target: "sanctifier", local_hash = %local_hash, remote_hash = %remote_hash, "bytecode hashes");
 
-    println!("  Local  WASM : {} bytes  sha256={}", local_bytes.len(), &local_hash[..16]);
+    println!(
+        "  Local  WASM : {} bytes  sha256={}",
+        local_bytes.len(),
+        &local_hash[..16]
+    );
     println!(
         "  Remote WASM : {} bytes  sha256={}",
         remote_bytes.len(),
@@ -74,12 +79,15 @@ pub fn exec(args: VerifyArgs) -> anyhow::Result<()> {
         );
         println!("  Local  sha256: {}", local_hash);
         println!("  Remote sha256: {}", remote_hash);
-        bail!("bytecode mismatch detected for contract {}", args.contract_id);
+        bail!(
+            "bytecode mismatch detected for contract {}",
+            args.contract_id
+        );
     }
 }
 
 /// Build the contract in release mode and return the path to the produced WASM.
-fn build_local_wasm(contract_path: &PathBuf) -> anyhow::Result<PathBuf> {
+fn build_local_wasm(contract_path: &Path) -> anyhow::Result<PathBuf> {
     println!("  Building local WASM …");
     let status = Command::new("cargo")
         .args([
@@ -196,12 +204,8 @@ impl Sha256 {
                 w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
             }
             for i in 16..64 {
-                let s0 = w[i - 15].rotate_right(7)
-                    ^ w[i - 15].rotate_right(18)
-                    ^ (w[i - 15] >> 3);
-                let s1 = w[i - 2].rotate_right(17)
-                    ^ w[i - 2].rotate_right(19)
-                    ^ (w[i - 2] >> 10);
+                let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+                let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
                 w[i] = w[i - 16]
                     .wrapping_add(s0)
                     .wrapping_add(w[i - 7])
