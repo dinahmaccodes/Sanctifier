@@ -55,6 +55,8 @@ pub const ADMIN_TRUST_RISK: &str = "S014";
 pub const HARDCODED_SECRET_KEY: &str = "S015";
 /// Integer truncation (cast) or unchecked slice/array indexing.
 pub const TRUNCATION_BOUNDS: &str = "S016";
+/// contractimport signature does not match actual implemented workspace source.
+pub const CONTRACTIMPORT_MISMATCH: &str = "S017";
 /// Use of PRNG without proper seeding in state-critical code.
 pub const UNSAFE_PRNG: &str = "S017";
 
@@ -160,6 +162,9 @@ pub fn all_finding_codes() -> Vec<FindingCode> {
             description: "Integer truncation cast or unchecked array/slice indexing",
         },
         FindingCode {
+            code: CONTRACTIMPORT_MISMATCH,
+            category: "integration",
+            description: "contractimport signature does not match actual implemented workspace source",
             code: UNSAFE_PRNG,
             category: "randomness",
             description: "Use of PRNG without proper seeding in state-critical code that could lead to predictable randomness",
@@ -193,6 +198,7 @@ mod tests {
         assert!(codes.iter().any(|c| c.code == SEP41_INTERFACE_DEVIATION));
         assert!(codes.iter().any(|c| c.code == HARDCODED_SECRET_KEY));
         assert!(codes.iter().any(|c| c.code == TRUNCATION_BOUNDS));
+        assert!(codes.iter().any(|c| c.code == CONTRACTIMPORT_MISMATCH));
         assert!(codes.iter().any(|c| c.code == UNSAFE_PRNG));
     }
 }

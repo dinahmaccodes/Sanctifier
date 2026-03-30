@@ -11,9 +11,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,12 +77,15 @@ pub struct AnalyzeArgs {
     /// Minimum severity threshold for --exit-code (critical|high|medium|low)
     #[arg(long, value_enum, default_value_t = SeverityLevel::High)]
     pub min_severity: SeverityLevel,
+    /// Disable incremental analysis cache
+    #[arg(short = 'n', long)]
+    pub no_cache: bool,
 }
 
 // ── Per-file result container ────────────────────────────────────────────────
 
 /// All findings produced by analysing a single `.rs` file.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub(crate) struct FileAnalysisResult {
     pub(crate) file_path: String,
     pub(crate) collisions: Vec<sanctifier_core::StorageCollisionIssue>,
@@ -98,6 +103,7 @@ pub(crate) struct FileAnalysisResult {
     pub(crate) truncation_bounds_issues: Vec<sanctifier_core::TruncationBoundsIssue>,
     pub(crate) sep41_checked_contracts: Vec<String>,
     pub(crate) sep41_issues: Vec<sanctifier_core::Sep41Issue>,
+    pub(crate) contractimport_issues: Vec<sanctifier_core::ContractImportMismatchIssue>,
     pub(crate) variable_shadowing_violations: Vec<sanctifier_core::RuleViolation>,
     pub(crate) timed_out: bool,
 }
@@ -165,10 +171,17 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
 
     let total_files = rs_files.len();
     let counter = Arc::new(AtomicUsize::new(0));
+    let cached_counter = Arc::new(AtomicUsize::new(0));
     let timeout_dur = if timeout_secs == 0 {
         None
     } else {
         Some(Duration::from_secs(timeout_secs))
+    };
+
+    let cache = if args.no_cache {
+        None
+    } else {
+        Some(Arc::new(Mutex::new(AnalysisCache::load(&path))))
     };
 
     let mut results: Vec<FileAnalysisResult> = rs_files
@@ -183,21 +196,48 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
                 Ok(c) => c,
                 Err(_) => return FileAnalysisResult::default(),
             };
+
+            let hash = sha256_hex(&content);
+            if let Some(ref cache_mutex) = cache {
+                if let Some(cached_res) = cache_mutex.lock().unwrap().lookup(&file_name, &hash) {
+                    cached_counter.fetch_add(1, Ordering::Relaxed);
+                    return cached_res;
+                }
+            }
+
             debug!(target: "sanctifier", file = %file_name, "Scanning Rust source file");
             let analyzer = Arc::clone(&analyzer);
             let vuln_db = Arc::clone(&vuln_db);
             let file_name_clone = file_name.clone();
-            match run_with_timeout(timeout_dur, move || {
+            let result = match run_with_timeout(timeout_dur, move || {
                 analyze_single_file(&analyzer, &vuln_db, &content, &file_name_clone)
             }) {
                 Some(res) => res,
                 None => {
                     warn!(target: "sanctifier", file = %file_name, timeout_secs = timeout_secs, "Analysis timed out");
-                    FileAnalysisResult { file_path: file_name, timed_out: true, ..Default::default() }
+                    FileAnalysisResult {
+                        file_path: file_name.clone(),
+                        timed_out: true,
+                        ..Default::default()
+                    }
                 }
+            };
+
+            if let Some(ref cache_mutex) = cache {
+                cache_mutex
+                    .lock()
+                    .unwrap()
+                    .store(file_name, hash, result.clone());
             }
+
+            result
         })
         .collect();
+
+    if let Some(cache_mutex) = cache {
+        let final_cache = Arc::try_unwrap(cache_mutex).unwrap().into_inner().unwrap();
+        final_cache.save();
+    }
 
     results.sort_by(|a, b| a.file_path.cmp(&b.file_path));
     let mut collisions = Vec::new();
@@ -215,6 +255,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
     let mut truncation_bounds_issues = Vec::new();
     let mut sep41_checked_contracts = Vec::new();
     let mut sep41_issues = Vec::new();
+    let mut contractimport_issues = Vec::new();
     let mut variable_shadowing_violations = Vec::new();
     let mut timed_out_files: Vec<String> = Vec::new();
 
@@ -234,6 +275,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         truncation_bounds_issues.extend(r.truncation_bounds_issues);
         sep41_checked_contracts.extend(r.sep41_checked_contracts);
         sep41_issues.extend(r.sep41_issues);
+        contractimport_issues.extend(r.contractimport_issues);
         variable_shadowing_violations.extend(r.variable_shadowing_violations);
         if r.timed_out {
             timed_out_files.push(r.file_path);
@@ -256,6 +298,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         + smt_issues.len()
         + truncation_bounds_issues.len()
         + sep41_issues.len()
+        + contractimport_issues.len()
         + variable_shadowing_violations.len()
         + timed_out_files.len();
 
@@ -328,6 +371,9 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         if !timed_out_files.is_empty() {
             consider(SeverityLevel::Low);
         }
+        if !contractimport_issues.is_empty() {
+            consider(SeverityLevel::Medium);
+        }
         highest
     };
 
@@ -353,7 +399,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         warn!(target: "sanctifier", error = %err, "Failed to initialize webhook client");
     }
 
-    let duration_ms = start.elapsed().as_millis() as u64;
+
 
     if is_json {
         let report = serde_json::json!({
@@ -372,6 +418,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             "smt_issues": smt_issues,
             "sep41_checked_contracts": sep41_checked_contracts,
             "sep41_issues": sep41_issues,
+            "contractimport_issues": contractimport_issues,
             "vulnerability_db_matches": vuln_matches,
             "vulnerability_db_version": vuln_db.version,
             "timed_out_files": timed_out_files,
@@ -382,10 +429,14 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
                 "project_path": path.display().to_string(),
                 "format": "sanctifier-ci-v1",
                 "timeout_secs": timeout_secs,
+                "cached_files": cached_counter.load(Ordering::Relaxed),
+                "total_files": total_files,
             },
             "error_codes": finding_codes::all_finding_codes(),
             "summary": {
                 "total_findings": total_findings,
+                "cached_files": cached_counter.load(Ordering::Relaxed),
+                "reanalysed_files": total_files - cached_counter.load(Ordering::Relaxed),
                 "storage_collisions": collisions.len(),
                 "auth_gaps": auth_gaps.len(),
                 "panic_issues": panic_issues.len(),
@@ -398,6 +449,7 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
                 "unhandled_results": unhandled_results.len(),
                 "smt_issues": smt_issues.len(),
                 "sep41_issues": sep41_issues.len(),
+                "contractimport_issues": contractimport_issues.len(),
                 "timed_out_files": timed_out_files.len(),
                 "has_critical": has_critical,
                 "has_high": has_high,
@@ -620,6 +672,19 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
             }
         }
     }
+    if !contractimport_issues.is_empty() {
+        println!("\n{} Found ContractImport Mismatches!", "⚠️".yellow());
+        for issue in &contractimport_issues {
+            println!(
+                "   {} [{}] WASM: {}",
+                "->".red(),
+                finding_codes::CONTRACTIMPORT_MISMATCH.bold(),
+                issue.wasm_path.bold()
+            );
+            println!("      Location: {}", issue.location);
+            println!("      Message: {}", issue.message);
+        }
+    }
     if vuln_matches.is_empty() {
         println!(
             "{} No known vulnerability patterns matched (DB v{}).",
@@ -655,9 +720,13 @@ pub fn exec(args: AnalyzeArgs) -> anyhow::Result<()> {
         }
     }
 
+    let cached_count = cached_counter.load(Ordering::Relaxed);
+    let reanalysed_count = total_files - cached_count;
     println!(
-        "\n{} Static analysis complete. ({} ms)",
+        "\n{} Static analysis complete. ({} served from cache, {} re-analysed, {} ms)",
         "✨".green(),
+        cached_count.to_string().bold(),
+        reanalysed_count.to_string().bold(),
         duration_ms
     );
     if should_exit_with_1 {
@@ -765,6 +834,60 @@ pub(crate) fn analyze_single_file(
         }
     }
 
+    let mut ci = analyzer.scan_contractimports(content);
+    for i in &mut ci {
+        i.location = format!("{}:{}", file_name, i.location);
+        
+        // Stale WASM check heuristic:
+        // Attempt to find the full path of the WASM file relative to the file doing the import.
+        let mut base_dir = PathBuf::from(file_name);
+        base_dir.pop();
+        let wasm_file_path = base_dir.join(&i.wasm_path);
+        
+        if !wasm_file_path.exists() {
+            i.message = format!("The imported WASM file does not exist: {}", wasm_file_path.display());
+        } else {
+            // Find modification time of the WASM
+            if let Ok(wasm_meta) = std::fs::metadata(&wasm_file_path) {
+                if let Ok(wasm_mtime) = wasm_meta.modified() {
+                    let wasm_stem = wasm_file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let mut found_newer_rs = false;
+                    let mut newest_rs_path = String::new();
+                    
+                    // Simple heuristic: look for any .rs file in the workspace containing the stem
+                    // If a matching .rs file is newer than the wasm, it's considered stale.
+                    let workspace_root = PathBuf::from(".");
+                    let rs_files = crate::commands::analyze::collect_rs_files(&workspace_root, &analyzer.config.ignore_paths);
+                    
+                    for rs_f in rs_files {
+                        let path_str = rs_f.display().to_string();
+                        // Strip hyphens and underscores for loose matching e.g. "my-contract" vs "my_contract"
+                        let normalized_stem = wasm_stem.replace('-', "_");
+                        let normalized_path = path_str.replace('-', "_");
+                        if normalized_path.contains(&normalized_stem) {
+                            if let Ok(rs_meta) = std::fs::metadata(&rs_f) {
+                                if let Ok(rs_mtime) = rs_meta.modified() {
+                                    if rs_mtime > wasm_mtime {
+                                        found_newer_rs = true;
+                                        newest_rs_path = path_str;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if found_newer_rs {
+                        i.message = format!("The imported WASM appears older than its corresponding workspace source file: {}. Rebuild the contract.", newest_rs_path);
+                    } else {
+                        i.message = String::new(); // No issue
+                    }
+                }
+            }
+        }
+    }
+    res.contractimport_issues = ci.into_iter().filter(|i| !i.message.is_empty()).collect();
+
     res
 }
 
@@ -858,3 +981,62 @@ pub(crate) fn is_soroban_project(path: &Path) -> bool {
     };
     cargo_toml_path.exists()
 }
+
+// ── Cache ────────────────────────────────────────────────────────────────────
+
+fn sha256_hex(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct CacheEntry {
+    hash: String,
+    result: FileAnalysisResult,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+struct AnalysisCache {
+    version: String,
+    entries: HashMap<String, CacheEntry>,
+    #[serde(skip)]
+    path: PathBuf,
+}
+
+impl AnalysisCache {
+    fn load(project_root: &Path) -> Self {
+        let path = project_root.join(".sanctifier_cache.json");
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(mut cache) = serde_json::from_str::<AnalysisCache>(&content) {
+                if cache.version == "1" {
+                    cache.path = path;
+                    return cache;
+                }
+            }
+        }
+        Self {
+            version: "1".to_string(),
+            entries: HashMap::new(),
+            path,
+        }
+    }
+
+    fn save(&self) {
+        if let Ok(content) = serde_json::to_string_pretty(self) {
+            let _ = fs::write(&self.path, content);
+        }
+    }
+
+    fn lookup(&self, file_path: &str, hash: &str) -> Option<FileAnalysisResult> {
+        self.entries
+            .get(file_path)
+            .filter(|e| e.hash == hash)
+            .map(|e| e.result.clone())
+    }
+
+    fn store(&mut self, file_path: String, hash: String, result: FileAnalysisResult) {
+        self.entries.insert(file_path, CacheEntry { hash, result });
+    }
+}
+

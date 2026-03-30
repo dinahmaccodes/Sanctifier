@@ -47,10 +47,10 @@ pub mod smt;
 /// Stub SMT types used when the `smt` feature is disabled.
 #[cfg(not(feature = "smt"))]
 pub mod smt {
-    use serde::Serialize;
+    use serde::{Deserialize, Serialize};
 
     /// Placeholder invariant issue type for builds without SMT support.
-    #[derive(Debug, Serialize, Clone, Default)]
+    #[derive(Debug, Serialize, Deserialize, Clone, Default)]
     pub struct SmtInvariantIssue {
         /// Function under verification.
         pub function_name: String,
@@ -90,7 +90,7 @@ where
 // ── Existing types ────────────────────────────────────────────────────────────
 
 /// Severity of a ledger size warning.
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SizeWarningLevel {
     /// Size exceeds the ledger entry limit (e.g. 64KB).
@@ -101,7 +101,7 @@ pub enum SizeWarningLevel {
 
 /// A warning about a `#[contracttype]` whose estimated serialised size is
 /// close to or exceeds the ledger entry limit.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SizeWarning {
     /// Name of the struct or enum that was analysed.
     pub struct_name: String,
@@ -115,7 +115,7 @@ pub struct SizeWarning {
 
 /// A `panic!`, `.unwrap()`, or `.expect()` call found inside a contract
 /// function.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PanicIssue {
     /// The contract function containing the panic-path.
     pub function_name: String,
@@ -128,7 +128,7 @@ pub struct PanicIssue {
 // ── UnsafePattern types (visitor-based panic/unwrap scanning) ─────────────────
 
 /// The kind of unsafe pattern detected by [`Analyzer::analyze_unsafe_patterns`].
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[non_exhaustive]
 pub enum PatternType {
     /// A `panic!()` macro invocation.
@@ -141,7 +141,7 @@ pub enum PatternType {
 
 /// An unsafe pattern (`panic!`, `.unwrap()`, `.expect()`) together with its
 /// source location.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UnsafePattern {
     /// The kind of pattern.
     pub pattern_type: PatternType,
@@ -154,7 +154,7 @@ pub struct UnsafePattern {
 // ── Upgrade analysis types ────────────────────────────────────────────────────
 
 /// A single finding related to contract upgrade / admin mechanisms.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UpgradeFinding {
     /// Broad category of the finding.
     pub category: UpgradeCategory,
@@ -169,7 +169,7 @@ pub struct UpgradeFinding {
 }
 
 /// Category of an upgrade-safety finding.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum UpgradeCategory {
@@ -186,7 +186,7 @@ pub enum UpgradeCategory {
 }
 
 /// Upgrade safety report produced by [`Analyzer::analyze_upgrade_patterns`].
-#[derive(Debug, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct UpgradeReport {
     /// Individual findings.
     pub findings: Vec<UpgradeFinding>,
@@ -308,7 +308,7 @@ fn is_init_fn(name: &str) -> bool {
 // ── ArithmeticIssue (NEW) ─────────────────────────────────────────────────────
 
 /// Represents an unchecked arithmetic operation that could overflow or underflow.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ArithmeticIssue {
     /// Contract function in which the operation was found.
     pub function_name: String,
@@ -323,7 +323,7 @@ pub struct ArithmeticIssue {
 // ── TruncationBoundsIssue ────────────────────────────────────────────────────
 
 /// Represents an integer truncation cast or unchecked array/slice indexing.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TruncationBoundsIssue {
     /// Contract function in which the issue was found.
     pub function_name: String,
@@ -340,7 +340,7 @@ pub struct TruncationBoundsIssue {
 // ── StorageCollisionIssue (NEW) ──────────────────────────────────────────────
 
 /// Represents a potential storage key collision.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StorageCollisionIssue {
     /// The storage key literal or expression.
     pub key_value: String,
@@ -352,8 +352,21 @@ pub struct StorageCollisionIssue {
     pub message: String,
 }
 
+// ── ContractImportIssue (NEW) ────────────────────────────────────────────────
+
+/// Represents a mismatch or staleness between a `contractimport!` WASM and workspace source.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContractImportMismatchIssue {
+    /// The `file` path argument from `contractimport!`.
+    pub wasm_path: String,
+    /// 1-based line location.
+    pub location: String,
+    /// Human-readable message.
+    pub message: String,
+}
+
 /// The kind of event issue detected by [`Analyzer::scan_events`].
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum EventIssueType {
     /// Topics count varies for the same event name.
@@ -363,7 +376,7 @@ pub enum EventIssueType {
 }
 
 /// An event-related finding (inconsistent schema or optimisable topic).
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventIssue {
     /// Function that emits the event.
     pub function_name: String,
@@ -378,7 +391,7 @@ pub struct EventIssue {
 }
 
 /// A `Result` return value that is silently discarded.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UnhandledResultIssue {
     /// Function containing the unhandled result.
     pub function_name: String,
@@ -407,7 +420,7 @@ pub struct CustomRule {
 }
 
 /// A match produced by a [`CustomRule`].
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomRuleMatch {
     /// Name of the custom rule that matched.
     pub rule_name: String,
@@ -729,6 +742,52 @@ impl Analyzer {
             }
         }
         gaps
+    }
+
+    // ── Contract Import scanning ─────────────────────────────────────────────
+
+    /// Scan for `contractimport!` declarations and return their parsed `file` paths.
+    /// Actual file staleness checks are performed by the caller to keep this pure.
+    pub fn scan_contractimports(&self, source: &str) -> Vec<ContractImportMismatchIssue> {
+        with_panic_guard(|| self.scan_contractimports_impl(source))
+    }
+
+    fn scan_contractimports_impl(&self, source: &str) -> Vec<ContractImportMismatchIssue> {
+        let file = match syn::parse_str::<syn::File>(source) {
+            Ok(f) => f,
+            Err(_) => return vec![],
+        };
+        let mut imports = Vec::new();
+
+        struct ContractImportVisitor<'a> {
+            issues: &'a mut Vec<ContractImportMismatchIssue>,
+        }
+
+        impl<'ast, 'a> visit::Visit<'ast> for ContractImportVisitor<'a> {
+            fn visit_macro(&mut self, node: &'ast syn::Macro) {
+                if node.path.is_ident("contractimport") {
+                    let tokens = node.tokens.to_string();
+                    // Basic parsing of `file = "..."`
+                    if let Some(path_start) = tokens.find("file = \"") {
+                        let path_start = path_start + 8;
+                        if let Some(path_end) = tokens[path_start..].find('"') {
+                            let wasm_path = &tokens[path_start..path_start + path_end];
+                            self.issues.push(ContractImportMismatchIssue {
+                                wasm_path: wasm_path.to_string(),
+                                location: node.path.segments[0].ident.span().start().line.to_string(),
+                                message: String::new(), // Populated by caller
+                            });
+                        }
+                    }
+                }
+                visit::visit_macro(self, node);
+            }
+        }
+
+        let mut visitor = ContractImportVisitor { issues: &mut imports };
+        visit::Visit::visit_file(&mut visitor, &file);
+        
+        imports
     }
 
     // ── Panic / unwrap / expect detection ────────────────────────────────────
@@ -2360,6 +2419,66 @@ mod tests {
         assert_eq!(unsafe_match.severity, RuleSeverity::Critical);
     }
 
+    // ── contractimport scanning tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_scan_contractimports_detects_file_path() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            use soroban_sdk::contractimport;
+            contractimport!(file = "../target/wasm32-unknown-unknown/release/my_contract.wasm");
+        "#;
+        let imports = analyzer.scan_contractimports(source);
+        assert_eq!(imports.len(), 1, "should detect one contractimport");
+        assert_eq!(
+            imports[0].wasm_path,
+            "../target/wasm32-unknown-unknown/release/my_contract.wasm"
+        );
+    }
+
+    #[test]
+    fn test_scan_contractimports_no_false_positive() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        // No contractimport! macro here — should find nothing
+        let source = r#"
+            #[contractimpl]
+            impl MyContract {
+                pub fn hello(env: Env) -> Symbol {
+                    Symbol::new(&env, "hello")
+                }
+            }
+        "#;
+        let imports = analyzer.scan_contractimports(source);
+        assert_eq!(
+            imports.len(),
+            0,
+            "contractimpl should not be confused with contractimport"
+        );
+    }
+
+    #[test]
+    fn test_scan_contractimports_multiple() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        let source = r#"
+            contractimport!(file = "../wasm/token.wasm");
+            contractimport!(file = "../wasm/oracle.wasm");
+        "#;
+        let imports = analyzer.scan_contractimports(source);
+        assert_eq!(imports.len(), 2, "should detect two contractimports");
+        let paths: Vec<&str> = imports.iter().map(|i| i.wasm_path.as_str()).collect();
+        assert!(paths.contains(&"../wasm/token.wasm"));
+        assert!(paths.contains(&"../wasm/oracle.wasm"));
+    }
+
+    #[test]
+    fn test_scan_contractimports_invalid_source_no_panic() {
+        let analyzer = Analyzer::new(SanctifyConfig::default());
+        // Intentionally broken Rust — should not panic, just return empty
+        let source = "this is { not valid rust }}}}";
+        let imports = analyzer.scan_contractimports(source);
+        assert_eq!(imports.len(), 0);
+    }
+
     #[test]
     fn test_unhandled_result_basic() {
         let analyzer = Analyzer::new(SanctifyConfig::default());
@@ -3266,7 +3385,7 @@ impl UnhandledResultIssue {
 }
 
 /// An authentication gap issue detected in a contract function.
-#[derive(Debug, serde::Serialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
 pub struct AuthGapIssue {
     /// The name of the function missing authentication.
     pub function_name: String,
