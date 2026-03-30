@@ -1,10 +1,9 @@
 //! Canonical finding codes emitted by Sanctifier analysis passes.
 //!
-//! Each constant (`S000` – `S012`) maps to a single diagnostic category.
+//! Each constant (`S000` – `S016`) maps to a single diagnostic category.
 //! Call `all_finding_codes()` to retrieve the full catalogue at runtime.
 
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Severity level for findings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -48,6 +47,20 @@ pub const UPGRADE_RISK: &str = "S010";
 pub const SMT_INVARIANT_VIOLATION: &str = "S011";
 /// SEP-41 token interface deviation.
 pub const SEP41_INTERFACE_DEVIATION: &str = "S012";
+/// Reentrancy vulnerability detected (state mutation before external call without guard).
+pub const REENTRANCY: &str = "S013";
+/// Potential administrative centralisation or insecure override.
+pub const ADMIN_TRUST_RISK: &str = "S014";
+/// Hardcoded secret key or sensitive mnemonic in contract source.
+pub const HARDCODED_SECRET_KEY: &str = "S015";
+/// Integer truncation (cast) or unchecked slice/array indexing.
+pub const TRUNCATION_BOUNDS: &str = "S016";
+/// contractimport signature does not match actual implemented workspace source.
+pub const CONTRACTIMPORT_MISMATCH: &str = "S017";
+/// Use of PRNG without proper seeding in state-critical code.
+pub const UNSAFE_PRNG: &str = "S018";
+/// Per-user or large dataset stored in Instance storage instead of Persistent.
+pub const INSTANCE_STORAGE_MISUSE: &str = "S019";
 
 /// A single finding-code entry with machine-readable code, category, and
 /// human-readable description.
@@ -130,6 +143,41 @@ pub fn all_finding_codes() -> Vec<FindingCode> {
             category: "token_interface",
             description: "SEP-41 token interface compatibility or authorization deviation",
         },
+        FindingCode {
+            code: REENTRANCY,
+            category: "reentrancy",
+            description: "State mutation before external call without a reentrancy guard",
+        },
+        FindingCode {
+            code: ADMIN_TRUST_RISK,
+            category: "centralization",
+            description: "Excessive administrative control or insecure credential management",
+        },
+        FindingCode {
+            code: HARDCODED_SECRET_KEY,
+            category: "secrets",
+            description: "Hardcoded secret key or sensitive mnemonic in contract source",
+        },
+        FindingCode {
+            code: TRUNCATION_BOUNDS,
+            category: "truncation_bounds",
+            description: "Integer truncation cast or unchecked array/slice indexing",
+        },
+        FindingCode {
+            code: CONTRACTIMPORT_MISMATCH,
+            category: "integration",
+            description: "contractimport signature does not match actual implemented workspace source",
+        },
+        FindingCode {
+            code: UNSAFE_PRNG,
+            category: "randomness",
+            description: "Use of PRNG without proper seeding in state-critical code that could lead to predictable randomness",
+        },
+        FindingCode {
+            code: INSTANCE_STORAGE_MISUSE,
+            category: "storage_type",
+            description: "Per-user or large dataset stored in Instance storage instead of Persistent, causing ledger entry bloat",
+        },
     ]
 }
 
@@ -155,6 +203,12 @@ mod tests {
         assert!(codes.iter().any(|c| c.code == STORAGE_COLLISION));
         assert!(codes.iter().any(|c| c.code == UNSAFE_PATTERN));
         assert!(codes.iter().any(|c| c.code == CUSTOM_RULE_MATCH));
+        assert!(codes.iter().any(|c| c.code == EVENT_INCONSISTENCY));
         assert!(codes.iter().any(|c| c.code == SEP41_INTERFACE_DEVIATION));
+        assert!(codes.iter().any(|c| c.code == HARDCODED_SECRET_KEY));
+        assert!(codes.iter().any(|c| c.code == TRUNCATION_BOUNDS));
+        assert!(codes.iter().any(|c| c.code == CONTRACTIMPORT_MISMATCH));
+        assert!(codes.iter().any(|c| c.code == UNSAFE_PRNG));
+        assert!(codes.iter().any(|c| c.code == INSTANCE_STORAGE_MISUSE));
     }
 }

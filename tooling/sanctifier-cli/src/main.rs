@@ -1,8 +1,7 @@
 #![recursion_limit = "512"]
 
 use clap::{Parser, Subcommand};
-use colored::*;
-use sanctifier_core::{callgraph_to_dot, Analyzer, SanctifyConfig};
+use sanctifier_core::SanctifyConfig;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::error;
@@ -23,10 +22,14 @@ struct Cli {
 pub enum Commands {
     /// Analyze a Soroban contract for vulnerabilities
     Analyze(commands::analyze::AnalyzeArgs),
+    /// Compare current scan results against a baseline to find only NEW vulnerabilities
+    Diff(commands::diff::DiffArgs),
     /// Generate a dynamic Sanctifier status badge
     Badge(commands::badge::BadgeArgs),
     /// Generate a Markdown or HTML security report
     Report(commands::report::ReportArgs),
+    /// Detect potential storage key collisions in Soroban contracts
+    Storage(commands::storage::StorageArgs),
     /// Initialize Sanctifier in a new project
     Init(commands::init::InitArgs),
     /// Show per-contract complexity metrics (cyclomatic complexity, nesting, LOC)
@@ -37,12 +40,22 @@ pub enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
 
+        /// Output format: text | json | junit
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
         /// Output DOT file path
         #[arg(short, long, default_value = "callgraph.dot")]
         output: PathBuf,
     },
     /// Check for and download the latest Sanctifier binary
     Update,
+    /// Detect reentrancy vulnerabilities (state mutation before external call)
+    Reentrancy(commands::reentrancy::ReentrancyArgs),
+    /// Verify local source against on-chain bytecode
+    Verify(commands::verify::VerifyArgs),
+    /// Analyze an entire Cargo workspace (multiple contracts/libs)
+    Workspace(commands::workspace::WorkspaceArgs),
 }
 
 fn main() {
@@ -56,12 +69,17 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let log_output = match &cli.command {
         Commands::Analyze(args) if args.format == "json" => logging::LogOutput::Json,
+        Commands::Diff(args) if args.format == "json" => logging::LogOutput::Json,
+        Commands::Storage(args) if args.format == commands::storage::OutputFormat::Json => {
+            logging::LogOutput::Json
+        }
         _ => logging::LogOutput::Text,
     };
     logging::init(log_output)?;
 
     match cli.command {
         Commands::Analyze(args) => commands::analyze::exec(args)?,
+        Commands::Diff(args) => commands::diff::exec(args)?,
         Commands::Badge(args) => {
             commands::badge::exec(args)?;
         }
@@ -71,13 +89,22 @@ fn run() -> anyhow::Result<()> {
         Commands::Report(args) => {
             commands::report::exec(args)?;
         }
+        Commands::Storage(args) => {
+            commands::storage::exec(args)?;
+        }
         Commands::Init(args) => {
             let path = Some(args.path.clone());
             commands::init::exec(args, path)?;
         }
-        Commands::Callgraph { path, output } => {
+        Commands::Callgraph {
+            path,
+            format,
+            output,
+        } => {
+            use sanctifier_core::{callgraph_to_dot, Analyzer};
             let config = load_config(&path);
             let analyzer = Analyzer::new(config.clone());
+            let is_json = format == "json";
 
             let mut rs_files: Vec<PathBuf> = Vec::new();
             if path.is_dir() {
@@ -91,42 +118,54 @@ fn run() -> anyhow::Result<()> {
                 if f.extension().and_then(|s| s.to_str()) != Some("rs") {
                     continue;
                 }
-
                 let content = match fs::read_to_string(&f) {
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-
                 let caller = infer_contract_name(&content).unwrap_or_else(|| {
                     f.file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("<unknown>")
                         .to_string()
                 });
-
                 let file_label = f.display().to_string();
                 edges.extend(analyzer.scan_invoke_contract_calls(&content, &caller, &file_label));
             }
 
-            let dot = callgraph_to_dot(&edges);
-            if let Err(e) = fs::write(&output, dot) {
-                error!(
-                    target: "sanctifier",
-                    output = %output.display(),
-                    error = %e,
-                    "Failed to write DOT file"
+            if is_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&edges).unwrap_or_else(|_| "[]".to_string())
                 );
-                std::process::exit(1);
+            } else {
+                let dot = callgraph_to_dot(&edges);
+                if let Err(e) = fs::write(&output, dot) {
+                    error!(
+                        target: "sanctifier",
+                        output = %output.display(),
+                        error = %e,
+                        "Failed to write DOT file"
+                    );
+                    std::process::exit(1);
+                }
+                println!(
+                    "✅ Wrote call graph to {:?} ({} edges)",
+                    output,
+                    edges.len()
+                );
             }
-            println!(
-                "{} Wrote call graph to {:?} ({} edges)",
-                "✅".green(),
-                output,
-                edges.len()
-            );
         }
         Commands::Update => {
             commands::update::exec()?;
+        }
+        Commands::Reentrancy(args) => {
+            commands::reentrancy::exec(args)?;
+        }
+        Commands::Verify(args) => {
+            commands::verify::exec(args)?;
+        }
+        Commands::Workspace(args) => {
+            commands::workspace::exec(args)?;
         }
     }
 
