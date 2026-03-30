@@ -17,6 +17,8 @@ pub mod shadow_storage;
 pub mod unhandled_result;
 /// Unused local variables.
 pub mod unused_variable;
+/// Detect usage of env.storage().instance().update() without state check.
+pub mod storage_update_state_check;
 
 use serde::Serialize;
 use std::any::Any;
@@ -170,6 +172,7 @@ impl RuleRegistry {
         registry.register(unhandled_result::UnhandledResultRule::new());
         registry.register(unused_variable::UnusedVariableRule::new());
         registry.register(shadow_storage::ShadowStorageRule::new());
+        registry.register(storage_update_state_check::StorageUpdateStateCheckRule::new());
         registry
     }
 }
