@@ -198,6 +198,10 @@ See: [QUICK_START.md - Verification](QUICK_START.md#-check-results-1-min)
 - Local Setup: [SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md#secret-management)
 - Best Practices: [SOROBAN_DEPLOYMENT.md - Security](SOROBAN_DEPLOYMENT.md#security-best-practices)
 
+**GitHub Action Hardening**
+- Support Matrix: [docs/github-action-support-matrix.md](docs/github-action-support-matrix.md)
+- Threat Model Notes: [docs/github-action-threat-model.md](docs/github-action-threat-model.md)
+
 **Production Setup**
 - Branch Protection: [docs/ci-cd-setup.md](docs/ci-cd-setup.md#branch-protection-recommended)
 - Network Security: [SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md#network-security)

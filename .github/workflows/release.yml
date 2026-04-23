@@ -4,6 +4,8 @@ on:
     tags:
       - "v*"
 
+permissions: {}
+
 jobs:
   build-and-release:
     name: Build and Release Binary
