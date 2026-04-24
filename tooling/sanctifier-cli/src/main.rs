@@ -12,7 +12,7 @@ pub mod vulndb;
 
 #[derive(Parser)]
 #[command(name = "sanctifier")]
-#[command(about = "Stellar Soroban Security & Formal Verification Suite", long_about = None)]
+#[command(version, about = "Stellar Soroban Security & Formal Verification Suite", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
