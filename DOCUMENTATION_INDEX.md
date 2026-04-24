@@ -88,6 +88,14 @@
 - Integration examples
 - Troubleshooting
 
+### Contracts Fixture Catalog
+
+**[contracts/README.md](contracts/README.md)**
+
+- Per-contract ownership map
+- Event-emission fixture references
+- Storage-collision fixture references
+- Unhandled-`Result` fixture references
 ### Frontend Report and Offline Behavior
 
 **[frontend/docs/report-export.md](frontend/docs/report-export.md)**  
