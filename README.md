@@ -67,6 +67,23 @@ cargo install --path .
 
 ## 🚀 Quick Start
 
+### Developer commands
+
+Common workflows are wrapped in a root-level `Makefile`:
+
+```bash
+make build    # cargo build --workspace
+make test     # cargo test --workspace
+make lint     # cargo fmt --all --check && cargo clippy --workspace -- -D warnings
+make fmt      # cargo fmt --all
+make audit    # cargo audit && cargo deny check
+make release  # cargo build --workspace --release
+make docs     # cargo doc --workspace --no-deps --open
+make clean    # cargo clean
+```
+
+### Analyse a contract
+
 Analyse a Soroban contract in a single command:
 
 ```bash
@@ -375,7 +392,7 @@ on:
 
 permissions:
   contents: read
-  security-events: write
+  # Add `security-events: write` only if you enable SARIF upload.
 
 jobs:
   scan:
@@ -390,11 +407,23 @@ jobs:
           min-severity: high
           upload-sarif: "true"
           sarif-output: sanctifier-results.sarif
+          debug: "false"
 ```
 
 When `format: sarif` and `upload-sarif: "true"`, the action uploads the SARIF
 file via `github/codeql-action/upload-sarif@v3` so findings appear in GitHub
 code scanning.
+
+Permissions notes:
+
+- **Minimum (scan only)**: `contents: read`
+- **With SARIF upload enabled**: add `security-events: write`
+
+See also:
+
+- `docs/github-action-support-matrix.md`
+- `docs/github-action-threat-model.md`
+- Debug logging mode: set `with: debug: "true"` to print extra `[sanctifier-action][debug] ...` lines (safe-by-default).
 
 ---
 
