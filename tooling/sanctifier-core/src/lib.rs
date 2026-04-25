@@ -40,6 +40,8 @@ pub mod finding_codes;
 pub mod gas_estimator;
 /// (Reserved) Gas report rendering.
 pub(crate) mod gas_report;
+/// Input validation guards (size, null bytes, UTF-8, path traversal).
+pub mod input_validation;
 /// Automatic patch application.
 pub mod patcher;
 /// Pluggable rule system ([`Rule`] trait, [`RuleRegistry`], built-in rules).
@@ -439,9 +441,15 @@ pub struct CustomRuleMatch {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SanctifyConfig {
     /// Paths to skip during directory walking.
+    ///
+    /// Defaults to `["target", ".git"]` — the two directories that are
+    /// almost always present and never contain user contracts.
     #[serde(default = "default_ignore_paths")]
     pub ignore_paths: Vec<String>,
     /// Names of enabled built-in rules.
+    ///
+    /// Defaults to the full rule set so new projects get complete coverage
+    /// without extra configuration.  Narrow this list to speed up CI.
     #[serde(default = "default_enabled_rules")]
     pub enabled_rules: Vec<String>,
     /// Ledger-entry size limit in bytes.
@@ -456,6 +464,19 @@ pub struct SanctifyConfig {
     /// User-defined regex rules.
     #[serde(default)]
     pub custom_rules: Vec<CustomRule>,
+    /// Maximum number of findings emitted per analysis run.
+    ///
+    /// `0` means unlimited.  Setting a cap (e.g. `500`) prevents unbounded
+    /// output on large or very noisy contracts and keeps CI logs readable.
+    /// Defaults to `0` (unlimited) so existing integrations are unaffected.
+    #[serde(default)]
+    pub max_findings: usize,
+    /// When `true`, stop analysis after the first finding per rule.
+    ///
+    /// Useful in fast-feedback loops (editor save hooks, pre-commit) where you
+    /// want a quick signal rather than a full report.  Defaults to `false`.
+    #[serde(default)]
+    pub fail_fast: bool,
 }
 
 fn default_ignore_paths() -> Vec<String> {
@@ -469,6 +490,9 @@ fn default_enabled_rules() -> Vec<String> {
         "arithmetic".to_string(),
         "ledger_size".to_string(),
         "events".to_string(),
+        "storage_collisions".to_string(),
+        "unhandled_results".to_string(),
+        "upgrade_patterns".to_string(),
     ]
 }
 
@@ -489,6 +513,8 @@ impl Default for SanctifyConfig {
             approaching_threshold: default_approaching_threshold(),
             strict_mode: false,
             custom_rules: vec![],
+            max_findings: 0,
+            fail_fast: false,
         }
     }
 }
