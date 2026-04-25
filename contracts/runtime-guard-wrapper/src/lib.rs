@@ -17,6 +17,51 @@ const CONTRACT_VERSION_KEY: &str = "version";
 /// changes and provide a migration path in `docs/contract-versioning.md`.
 pub const CONTRACT_VERSION: u32 = 1;
 
+// ── Semantic error codes ───────────────────────────────────────────────────────
+//
+// These constants replace raw numeric literals throughout the contract so that
+// a failing test or on-chain event can be matched to a specific guard stage
+// without consulting source code.
+
+/// Pre-execution guard: wrapped contract address has not been set via `init`.
+pub const ERR_WRAPPED_CONTRACT_NOT_SET: u32 = 1;
+
+/// Pre-execution guard: instance storage is missing the wrapped contract key —
+/// indicates storage was cleared or the contract was not properly initialised.
+pub const ERR_STORAGE_INTEGRITY_FAILED: u32 = 2;
+
+/// Execution monitoring: the requested function name is not registered in the
+/// allowed function dispatch table.
+pub const ERR_UNKNOWN_FUNCTION: u32 = 3;
+
+/// Execution monitoring: the argument vector length does not match the expected
+/// arity for the requested function.
+pub const ERR_ARGUMENT_COUNT_MISMATCH: u32 = 4;
+
+// ── Error message helpers ──────────────────────────────────────────────────────
+
+/// Human-readable error descriptions keyed to each semantic error code.
+///
+/// These are intentionally kept in `no_std` (no heap allocations beyond the
+/// string literal itself) so they can be embedded in event data or returned
+/// to callers via the host SDK without requiring `std::string::String`.
+pub mod error_messages {
+    pub const WRAPPED_CONTRACT_NOT_SET: &str =
+        "Guard wrapper has not been initialised: call `init` with a wrapped contract address first";
+
+    pub const STORAGE_INTEGRITY_FAILED: &str =
+        "Instance storage integrity check failed: wrapped contract address key is missing — \
+         the contract may have been deployed without calling `init`";
+
+    pub const UNKNOWN_FUNCTION: &str =
+        "Requested function name is not registered in the guard dispatch table — \
+         only `ping`, `echo`, and `sum` are currently supported";
+
+    pub const ARGUMENT_COUNT_MISMATCH: &str =
+        "Argument count does not match the expected arity for the requested function — \
+         check the function signature in the dispatch table";
+}
+
 mod event_fixtures {
     use soroban_sdk::{Env, Symbol};
 
@@ -148,11 +193,24 @@ impl RuntimeGuardWrapper {
     }
 
     pub fn execute_guarded(env: Env, function_name: Symbol, args: Vec<Val>) -> Result<Val, Error> {
+        Self::validate_function_name(&env, &function_name)?;
         Self::pre_execution_guards(env.clone())?;
         let result = Self::execute_with_monitoring(env.clone(), &function_name, &args)?;
         Self::post_execution_guards(env.clone())?;
         Self::log_execution(env.clone(), &function_name, &result);
         Ok(result)
+    }
+
+    /// Validate that the function name is non-empty and within the allowed
+    /// Symbol length (Soroban Symbols are capped at 32 characters).
+    fn validate_function_name(env: &Env, function_name: &Symbol) -> Result<(), Error> {
+        // A valid function name Symbol must be non-zero when converted to a Val
+        // payload — this catches default/zero Symbol values.
+        let val: Val = function_name.clone().into_val(env);
+        if val.get_payload() == 0 {
+            return Err(Error::from_contract_error(ERR_UNKNOWN_FUNCTION));
+        }
+        Ok(())
     }
 
     fn pre_execution_guards(env: Env) -> Result<(), Error> {
@@ -166,7 +224,7 @@ impl RuntimeGuardWrapper {
                 event_fixtures::EVENT_PRE_EXEC_GUARD,
                 event_fixtures::STATUS_WRAPPED_NOT_SET,
             );
-            return Err(Error::from_contract_error(1));
+            return Err(Error::from_contract_error(ERR_WRAPPED_CONTRACT_NOT_SET));
         }
 
         Self::validate_storage_integrity(env)?;
@@ -188,7 +246,7 @@ impl RuntimeGuardWrapper {
         let wrapped_addr: Option<Address> =
             instance_storage.get(&Symbol::new(&env, WRAPPED_CONTRACT_ADDRESS));
         if wrapped_addr.is_none() {
-            return Err(Error::from_contract_error(2));
+            return Err(Error::from_contract_error(ERR_STORAGE_INTEGRITY_FAILED));
         }
         Ok(())
     }
@@ -214,13 +272,13 @@ impl RuntimeGuardWrapper {
             Some(count) => count,
             None => {
                 Self::record_guard_failure(env.clone(), Symbol::new(&env, "missing_function"));
-                return Err(Error::from_contract_error(3));
+                return Err(Error::from_contract_error(ERR_UNKNOWN_FUNCTION));
             }
         };
 
         if args.len() != expected_arg_count {
             Self::record_guard_failure(env.clone(), Symbol::new(&env, "arg_mismatch"));
-            return Err(Error::from_contract_error(4));
+            return Err(Error::from_contract_error(ERR_ARGUMENT_COUNT_MISMATCH));
         }
 
         let start_tick = env.ledger().timestamp();
@@ -280,13 +338,13 @@ impl RuntimeGuardWrapper {
         }
         if *function_name == sum {
             let left = u32::try_from_val(&env, &args.get(0).unwrap_or(Val::VOID.into()))
-                .map_err(|_| Error::from_contract_error(4))?;
+                .map_err(|_| Error::from_contract_error(ERR_ARGUMENT_COUNT_MISMATCH))?;
             let right = u32::try_from_val(&env, &args.get(1).unwrap_or(Val::VOID.into()))
-                .map_err(|_| Error::from_contract_error(4))?;
+                .map_err(|_| Error::from_contract_error(ERR_ARGUMENT_COUNT_MISMATCH))?;
             return Ok(left.saturating_add(right).into_val(&env));
         }
 
-        Err(Error::from_contract_error(3))
+        Err(Error::from_contract_error(ERR_UNKNOWN_FUNCTION))
     }
 
     fn log_execution(env: Env, function_name: &Symbol, _result: &Val) {
