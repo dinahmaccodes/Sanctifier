@@ -135,6 +135,20 @@ fn check_for_vulnerable_update(stmt: &Stmt, has_check: bool) -> bool {
                     }
                 }
             }
+            if let Expr::Match(expr_match) = expr {
+                if is_storage_has_call(&expr_match.expr) {
+                    return false;
+                }
+                for arm in &expr_match.arms {
+                    if let Expr::Block(expr_block) = arm.body.as_ref() {
+                        for s in &expr_block.block.stmts {
+                            if check_for_vulnerable_update(s, has_check) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     false
