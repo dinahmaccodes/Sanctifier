@@ -6,7 +6,21 @@
 
 use crate::constants::{
     MAX_CONFIG_SIZE, MAX_SOURCE_SIZE, MEMORY_BUDGET_BYTES, MEMORY_OVERHEAD_FACTOR, MIN_SOURCE_SIZE,
+    MEMORY_BUDGET_BYTES_BROWSER, MEMORY_BUDGET_BYTES_NODE,
+    MAX_SOURCE_SIZE_BROWSER, MAX_SOURCE_SIZE_NODE,
 };
+
+/// Deployment target for target-aware validation.
+///
+/// Pass this to [`validate_for_target`] to apply limits that match the
+/// environment where the WASM module is actually running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmTarget {
+    /// Running inside a browser tab (conservative memory limits).
+    Browser,
+    /// Running inside Node.js (e.g. CI, server-side API, test suite).
+    Node,
+}
 
 /// Validate source code input against size limits.
 ///
@@ -67,6 +81,53 @@ pub fn validate_config_json(config_json: &str) -> Result<(), String> {
         return Err(format!(
             "Configuration JSON exceeds maximum size of {} bytes",
             MAX_CONFIG_SIZE
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate source code and memory budget for a specific deployment target.
+///
+/// Applies target-appropriate size and memory limits so that:
+/// - Browser callers receive conservative limits that protect tab stability.
+/// - Node.js callers receive relaxed limits suitable for CI / server workflows.
+///
+/// # Errors
+/// Returns the first validation error encountered:
+/// - `"Source code cannot be empty"` — source is zero bytes.
+/// - `"Source code exceeds maximum size of N bytes (got M bytes)"` — above limit.
+/// - Memory budget exceeded message — estimated working set too large.
+pub fn validate_for_target(source: &str, target: WasmTarget) -> Result<(), String> {
+    let len = source.len();
+
+    let (max_source, memory_budget) = match target {
+        WasmTarget::Browser => (MAX_SOURCE_SIZE_BROWSER, MEMORY_BUDGET_BYTES_BROWSER),
+        WasmTarget::Node => (MAX_SOURCE_SIZE_NODE, MEMORY_BUDGET_BYTES_NODE),
+    };
+
+    if len < MIN_SOURCE_SIZE {
+        return Err("Source code cannot be empty".to_string());
+    }
+
+    if len > max_source {
+        return Err(format!(
+            "Source code exceeds maximum size of {} bytes (got {} bytes)",
+            max_source, len
+        ));
+    }
+
+    let estimated = len.saturating_mul(MEMORY_OVERHEAD_FACTOR);
+    if estimated > memory_budget {
+        return Err(format!(
+            "Estimated working set {} bytes exceeds {} memory budget of {} bytes. \
+             Split the contract into smaller files.",
+            estimated,
+            match target {
+                WasmTarget::Browser => "browser",
+                WasmTarget::Node => "node",
+            },
+            memory_budget
         ));
     }
 
@@ -148,5 +209,65 @@ mod tests {
     #[test]
     fn validate_config_at_max_size_ok() {
         assert!(validate_config_json(&"x".repeat(MAX_CONFIG_SIZE)).is_ok());
+    }
+
+    // ── validate_for_target (node vs browser parity) ──────────────────────────
+
+    #[test]
+    fn target_browser_rejects_empty() {
+        assert!(validate_for_target("", WasmTarget::Browser).is_err());
+    }
+
+    #[test]
+    fn target_node_rejects_empty() {
+        assert!(validate_for_target("", WasmTarget::Node).is_err());
+    }
+
+    #[test]
+    fn target_browser_accepts_small_source() {
+        assert!(validate_for_target("fn foo() {}", WasmTarget::Browser).is_ok());
+    }
+
+    #[test]
+    fn target_node_accepts_small_source() {
+        assert!(validate_for_target("fn foo() {}", WasmTarget::Node).is_ok());
+    }
+
+    #[test]
+    fn target_node_accepts_larger_source_than_browser() {
+        // A source slightly above the browser limit but below the node limit.
+        let mid_size = "x".repeat(MAX_SOURCE_SIZE_BROWSER + 1);
+        assert!(
+            validate_for_target(&mid_size, WasmTarget::Browser).is_err(),
+            "browser should reject source above its limit"
+        );
+        assert!(
+            validate_for_target(&mid_size, WasmTarget::Node).is_ok(),
+            "node should accept source within its higher limit"
+        );
+    }
+
+    #[test]
+    fn target_node_memory_budget_is_higher_than_browser() {
+        assert!(
+            MEMORY_BUDGET_BYTES_NODE > MEMORY_BUDGET_BYTES_BROWSER,
+            "node budget must exceed browser budget"
+        );
+    }
+
+    #[test]
+    fn target_browser_memory_error_mentions_browser() {
+        let just_over = MEMORY_BUDGET_BYTES_BROWSER / MEMORY_OVERHEAD_FACTOR + 1;
+        let source = "x".repeat(just_over);
+        let err = validate_for_target(&source, WasmTarget::Browser).unwrap_err();
+        assert!(err.contains("browser"), "error should mention target: {err}");
+    }
+
+    #[test]
+    fn target_node_memory_error_mentions_node() {
+        let just_over = MEMORY_BUDGET_BYTES_NODE / MEMORY_OVERHEAD_FACTOR + 1;
+        let source = "x".repeat(just_over);
+        let err = validate_for_target(&source, WasmTarget::Node).unwrap_err();
+        assert!(err.contains("node"), "error should mention target: {err}");
     }
 }
