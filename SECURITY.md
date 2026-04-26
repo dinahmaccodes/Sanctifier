@@ -14,11 +14,11 @@ We take security vulnerabilities in Sanctifier seriously. If you discover a secu
 
 1. **Do not** open a public GitHub issue for security vulnerabilities.
 2. Send an email to **security@sanctifier.dev** with the following information:
-   - A clear description of the vulnerability
-   - Steps to reproduce the issue
-   - The affected component (CLI, core library, frontend, smart contracts)
-   - The potential impact and severity assessment
-   - Any suggested fix or mitigation (optional)
+   - A clear description of the vulnerability.
+   - Steps to reproduce the issue.
+   - The affected component (CLI, core library, frontend, smart contracts).
+   - The potential impact and severity assessment.
+   - Any suggested fix or mitigation (optional).
 
 ### What to Expect
 
