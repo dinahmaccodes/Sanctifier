@@ -1516,7 +1516,7 @@ impl Analyzer {
 }
 
 /// An edge in the cross-contract call graph.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractCallEdge {
     /// The calling contract.
     pub caller: String,

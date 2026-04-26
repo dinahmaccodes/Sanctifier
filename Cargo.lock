@@ -1219,6 +1219,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "governance-contract"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1938,6 +1945,14 @@ dependencies = [
  "serde_urlencoded",
  "similar",
  "tokio",
+]
+
+[[package]]
+name = "multisig-wallet"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -3490,6 +3505,14 @@ checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "timelock"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "soroban-sdk",
 ]
 
 [[package]]
