@@ -38,7 +38,7 @@ and optionally proves invariants with Z3.
 
 ## 📦 Installation
 
-### From crates.io
+### From crates.io.
 
 ```bash
 cargo install sanctifier-cli
