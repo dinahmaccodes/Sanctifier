@@ -59,8 +59,8 @@ pub fn exec(args: WatchArgs) -> anyhow::Result<()> {
                     println!("\n👀 Watching for changes in {:?}...", path);
                 }
             }
-            Err(e) => {
-                eprintln!("Watch error: {:?}", e);
+            Err(error) => {
+                eprintln!("Watch error: {:?}", error);
             }
         }
     }
