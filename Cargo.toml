@@ -16,6 +16,7 @@ members = [
     "contracts/flashloan-token",
     "contracts/proxy",
     "contracts/vesting",
+    "contracts/benchmark",
 
 ]
 resolver = "2"
@@ -25,6 +26,9 @@ soroban-sdk = { version = "21.7.6" }
 
 [workspace.package]
 rust-version = "1.78"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [profile.release]
 opt-level = "z"
